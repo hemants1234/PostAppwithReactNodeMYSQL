@@ -1,4 +1,6 @@
 import {asyncHandler} from "../utils/asyncHandler.js";
+import redisClient from "../utils/redisClient.js";
+
 import { Op }  from 'sequelize';
 import {ApiError} from "../utils/ApiError.js";
 import User from "../models/user.model.js";
@@ -40,23 +42,37 @@ const createPost = async (req, res) => {
     }
 };
 
+
+// ...
+
 const getAllPost = asyncHandler(async (req, res) => {
-
     try {
-        // Check if the user exists in the database using Sequelize
-        const isUserPresent = await User.findOne({
-            where: { id: req.user?.id }  // Assuming `id` is the primary key for User
-        });
+        const userId = req.user?.id;
 
+        const isUserPresent = await User.findOne({ where: { id: userId } });
         if (!isUserPresent) {
             throw new ApiError(401, "Unauthorized Access");
         }
 
-        // Get all posts from the Post model using Sequelize
+        // Try to fetch from Redis
+        const cacheKey = `posts:user:${userId}`;
+        const cachedPosts = await redisClient.get(cacheKey);
+
+        if (cachedPosts) {
+            return res.status(200).json({
+                message: 'All posts fetched from cache',
+                posts: JSON.parse(cachedPosts)
+            });
+        }
+
+        // Fetch from DB
         const posts = await Post.findAll();
 
+        // Cache the result for future requests
+        await redisClient.setEx(cacheKey, 3600, JSON.stringify(posts)); // Cache for 1 hour
+
         res.status(200).json({
-            message: 'All posts fetched successfully',
+            message: 'All posts fetched from DB',
             posts: posts
         });
 
@@ -67,6 +83,7 @@ const getAllPost = asyncHandler(async (req, res) => {
         });
     }
 });
+
 
 const updatePost = asyncHandler(async (req, res) => {
     const pId = req.params.pId;
